@@ -5,6 +5,8 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -51,6 +53,8 @@ public final class LauncherActivity extends Activity {
     private static final int REQUEST_MOD_ZIP = 1004;
     private static final int REQUEST_MOD_TREE = 1005;
     private static final int REQUEST_GAME_PACKAGES = 1006;
+    private static final int REQUEST_CUSTOM_BACKGROUND = 1007;
+    private static final int REQUEST_CUSTOM_LOGO = 1008;
     private static final int DRIVER_EXPERIMENTAL_A725 = 4;
     private static final int DRIVER_IMPORTED = 5;
     private static final int RENDER_MODE_SYSMEM = 2;
@@ -85,8 +89,18 @@ public final class LauncherActivity extends Activity {
     private SharedPreferences prefs;
     private InstallState lastInstallState;
     private boolean onSettingsPage;
+    private int settingsSection;
 
     private static final String STATE_ON_SETTINGS_PAGE = "on_settings_page";
+    private static final String STATE_SETTINGS_SECTION = "settings_section";
+
+    private static final int SECTION_FILES = 0;
+    private static final int SECTION_APPEARANCE = 1;
+    private static final int SECTION_UPDATES = 2;
+    private static final int SECTION_GRAPHICS = 3;
+    private static final int SECTION_CONTROLS = 4;
+    private static final int SECTION_MODS = 5;
+    private static final int SECTION_DEBUG = 6;
 
     private static final class InstallState {
         final boolean ready;
@@ -107,17 +121,39 @@ public final class LauncherActivity extends Activity {
             params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             getWindow().setAttributes(params);
         }
+        hideSystemBars();
         prefs = getPreferences(MODE_PRIVATE);
         onSettingsPage = state != null && state.getBoolean(STATE_ON_SETTINGS_PAGE, false);
+        settingsSection = state != null ? state.getInt(STATE_SETTINGS_SECTION, SECTION_FILES) : SECTION_FILES;
         setContentView(onSettingsPage ? buildSettingsPage() : buildHomePage());
         if (onSettingsPage) loadSettings();
         maybeCheckForUpdates();
+    }
+
+    /** Hides the status and navigation bars, matching SDLActivity's immersive-sticky
+     *  setup - without this the launcher shows a system status bar tray the game
+     *  itself never does. */
+    private void hideSystemBars() {
+        int flags = View.SYSTEM_UI_FLAG_FULLSCREEN |
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+            View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE;
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean(STATE_ON_SETTINGS_PAGE, onSettingsPage);
+        outState.putInt(STATE_SETTINGS_SECTION, settingsSection);
     }
 
     @Override
@@ -138,6 +174,16 @@ public final class LauncherActivity extends Activity {
 
     private void openSettings() {
         onSettingsPage = true;
+        settingsSection = SECTION_FILES;
+        setContentView(buildSettingsPage());
+        loadSettings();
+        refreshStatuses();
+    }
+
+    /** Saves whatever the current section holds, then rebuilds on the new one. */
+    private void switchSection(int section) {
+        saveSettings();
+        settingsSection = section;
         setContentView(buildSettingsPage());
         loadSettings();
         refreshStatuses();
@@ -159,7 +205,16 @@ public final class LauncherActivity extends Activity {
      */
     private View buildHomePage() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundResource(R.drawable.bg_launcher_gradient);
+
+        ImageView background = new ImageView(this);
+        background.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        if (customBackgroundFile().isFile()) {
+            background.setImageURI(Uri.fromFile(customBackgroundFile()));
+        } else {
+            background.setImageResource(R.drawable.bg_launcher_gradient);
+        }
+        root.addView(background, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         LinearLayout column = column();
         column.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -169,7 +224,11 @@ public final class LauncherActivity extends Activity {
         root.addView(column, columnParams);
 
         ImageView logo = new ImageView(this);
-        logo.setImageResource(R.drawable.img_logo);
+        if (customLogoFile().isFile()) {
+            logo.setImageURI(Uri.fromFile(customLogoFile()));
+        } else {
+            logo.setImageResource(R.drawable.img_logo);
+        }
         logo.setAdjustViewBounds(true);
         LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(
             dp(380), LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -200,38 +259,94 @@ public final class LauncherActivity extends Activity {
         playParams.topMargin = dp(20);
         column.addView(playButton, playParams);
 
+        LinearLayout links = row();
+        links.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams linksParams = matchWrap();
+        linksParams.topMargin = dp(18);
+        column.addView(links, linksParams);
+
         TextView settingsLink = text(getString(R.string.launcher_settings), 15, false);
         settingsLink.setTextColor(Color.rgb(150, 150, 165));
         settingsLink.setGravity(Gravity.CENTER);
-        settingsLink.setPadding(dp(18), dp(18), dp(18), dp(6));
+        settingsLink.setPadding(dp(18), 0, dp(18), dp(6));
         settingsLink.setOnClickListener(view -> openSettings());
-        column.addView(settingsLink);
+        links.addView(settingsLink);
+
+        TextView exitLink = text(getString(R.string.launcher_exit), 15, false);
+        exitLink.setTextColor(Color.rgb(150, 150, 165));
+        exitLink.setGravity(Gravity.CENTER);
+        exitLink.setPadding(dp(18), 0, dp(18), dp(6));
+        exitLink.setOnClickListener(view -> finishAffinity());
+        links.addView(exitLink);
 
         return root;
     }
 
+    private static final int[] SETTINGS_SECTION_TITLES = {
+        R.string.launcher_game_files, R.string.launcher_appearance, R.string.launcher_updates,
+        R.string.launcher_graphics, R.string.launcher_controls, R.string.launcher_mods,
+        R.string.launcher_debug
+    };
+
     private View buildSettingsPage() {
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout page = column();
-        page.setPadding(dp(18), dp(18), dp(18), dp(28));
-        scroll.addView(page);
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.rgb(16, 16, 24));
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.HORIZONTAL);
+        root.addView(page, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout sidebar = column();
+        sidebar.setBackgroundColor(Color.rgb(20, 20, 30));
+        // The activity draws edge-to-edge, so the first item would otherwise land
+        // partly under the status bar; dp(14) alone isn't enough to clear it.
+        sidebar.setPadding(dp(14), dp(30), dp(14), dp(14));
+        page.addView(sidebar, new LinearLayout.LayoutParams(dp(230), LinearLayout.LayoutParams.MATCH_PARENT));
 
         TextView back = text(getString(R.string.launcher_back_to_home), 15, false);
-        // The activity draws edge-to-edge, so the first item in the scroll content
-        // would otherwise land partly under the status bar. dp(18) of page padding
-        // isn't enough to clear it; give this one extra top padding of its own.
-        back.setPadding(0, dp(28), 0, dp(10));
+        back.setPadding(dp(10), 0, dp(10), dp(22));
         back.setOnClickListener(view -> openHome());
-        page.addView(back);
+        sidebar.addView(back);
 
-        TextView title = text(getString(R.string.launcher_title), 28, true);
-        page.addView(title);
-        TextView subtitle = text(getString(R.string.launcher_subtitle), 15, false);
-        subtitle.setTextColor(Color.DKGRAY);
-        subtitle.setPadding(0, dp(3), 0, dp(14));
-        page.addView(subtitle);
+        for (int i = 0; i < SETTINGS_SECTION_TITLES.length; i++) {
+            final int section = i;
+            boolean selected = settingsSection == i;
+            TextView item = text(getString(SETTINGS_SECTION_TITLES[i]), 16, selected);
+            item.setPadding(dp(14), dp(14), dp(14), dp(14));
+            item.setBackgroundResource(R.drawable.bg_sidebar_item);
+            item.setSelected(selected);
+            LinearLayout.LayoutParams itemParams = matchWrap();
+            itemParams.bottomMargin = dp(4);
+            item.setLayoutParams(itemParams);
+            item.setOnClickListener(view -> {
+                if (settingsSection != section) switchSection(section);
+            });
+            sidebar.addView(item);
+        }
 
-        LinearLayout files = card(R.string.launcher_game_files);
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = column();
+        content.setPadding(dp(24), dp(30), dp(24), dp(28));
+        scroll.addView(content);
+        page.addView(scroll, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+        switch (settingsSection) {
+            case SECTION_APPEARANCE: buildAppearanceSection(content); break;
+            case SECTION_UPDATES: buildUpdatesSection(content); break;
+            case SECTION_GRAPHICS: buildGraphicsSection(content); break;
+            case SECTION_CONTROLS: buildControlsSection(content); break;
+            case SECTION_MODS: buildModsSection(content); break;
+            case SECTION_DEBUG: buildDebugSection(content); break;
+            case SECTION_FILES:
+            default: buildFilesSection(content); break;
+        }
+
+        return root;
+    }
+
+    private void buildFilesSection(LinearLayout content) {
+        LinearLayout files = panel();
         installStatus = statusText();
         files.addView(installStatus);
         files.addView(button(R.string.launcher_install_game, view -> chooseInstallSource(true)));
@@ -240,23 +355,54 @@ public final class LauncherActivity extends Activity {
         fileButtons.addView(button(R.string.launcher_recheck, view -> refreshStatuses()), weighted());
         files.addView(fileButtons);
         files.addView(button(R.string.launcher_open_saves, view -> openFiles("save")));
-        page.addView(files);
+        content.addView(files);
+    }
 
-        LinearLayout updates = card(R.string.launcher_updates);
+    private void buildAppearanceSection(LinearLayout content) {
+        LinearLayout appearance = panel();
+        appearance.addView(text(getString(R.string.launcher_appearance_summary), 14, false));
+
+        LinearLayout bgRow = row();
+        bgRow.addView(button(R.string.launcher_choose_background,
+            view -> chooseCustomImage(REQUEST_CUSTOM_BACKGROUND)), weighted());
+        if (customBackgroundFile().isFile()) {
+            bgRow.addView(button(R.string.launcher_reset_background, view -> {
+                customBackgroundFile().delete();
+                switchSection(SECTION_APPEARANCE);
+            }), weighted());
+        }
+        appearance.addView(bgRow);
+
+        LinearLayout logoRow = row();
+        logoRow.addView(button(R.string.launcher_choose_logo,
+            view -> chooseCustomImage(REQUEST_CUSTOM_LOGO)), weighted());
+        if (customLogoFile().isFile()) {
+            logoRow.addView(button(R.string.launcher_reset_logo, view -> {
+                customLogoFile().delete();
+                switchSection(SECTION_APPEARANCE);
+            }), weighted());
+        }
+        appearance.addView(logoRow);
+
+        content.addView(appearance);
+    }
+
+    private void buildUpdatesSection(LinearLayout content) {
+        LinearLayout updates = panel();
         updateStatus = statusText();
         updateStatus.setText(getString(R.string.update_current_version, UpdateManager.currentVersion(this)));
         updates.addView(updateStatus);
         updateButton = button(R.string.update_check, view -> checkForUpdates(true));
         updates.addView(updateButton);
-        page.addView(updates);
+        content.addView(updates);
+    }
 
-        LinearLayout graphics = collapsibleCard(page, R.string.launcher_graphics, "expand_graphics", false);
+    private void buildGraphicsSection(LinearLayout content) {
+        LinearLayout graphics = panel();
         driverStatus = statusText();
         graphics.addView(driverStatus);
-        driverSpinner = settingSpinner(graphics, R.string.launcher_driver,
-            R.array.driver_labels);
-        renderSpinner = settingSpinner(graphics, R.string.launcher_render_mode,
-            R.array.render_mode_labels);
+        driverSpinner = settingSpinner(graphics, R.string.launcher_driver, R.array.driver_labels);
+        renderSpinner = settingSpinner(graphics, R.string.launcher_render_mode, R.array.render_mode_labels);
         driverSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -272,25 +418,32 @@ public final class LauncherActivity extends Activity {
         driverButtons.addView(button(R.string.launcher_import_driver, view -> chooseDriver()), weighted());
         driverButtons.addView(button(R.string.launcher_driver_folder, view -> openFiles("transfer")), weighted());
         graphics.addView(driverButtons);
+        content.addView(graphics);
+    }
 
+    private void buildControlsSection(LinearLayout content) {
         // The runtime touch settings (on-screen controls, camera and stick) now live
         // in the in-game options menu; only the layout editor stays here as it launches
         // the game renderer.
-        LinearLayout controls = card(R.string.launcher_controls);
+        LinearLayout controls = panel();
         controls.addView(text(getString(R.string.launcher_controls_moved), 14, false));
-        Button editLayout = button(R.string.launcher_edit_layout, view -> launchLayoutEditor());
-        controls.addView(editLayout);
-        page.addView(controls);
+        controls.addView(button(R.string.launcher_edit_layout, view -> launchLayoutEditor()));
+        content.addView(controls);
+    }
 
-        LinearLayout mods = collapsibleCard(page, R.string.launcher_mods, "expand_mods", false);
+    private void buildModsSection(LinearLayout content) {
+        LinearLayout mods = panel();
         mods.addView(text(getString(R.string.launcher_mods_summary), 14, false));
         LinearLayout modButtons = row();
         modButtons.addView(button(R.string.launcher_manage_mods,
             view -> startActivity(new Intent(this, ModManagerActivity.class))), weighted());
         modButtons.addView(button(R.string.launcher_install_mod, view -> chooseInstallSource(false)), weighted());
         mods.addView(modButtons);
+        content.addView(mods);
+    }
 
-        LinearLayout debug = collapsibleCard(page, R.string.launcher_debug, "expand_debug", false);
+    private void buildDebugSection(LinearLayout content) {
+        LinearLayout debug = panel();
         skipIntro = checkBox(R.string.launcher_skip_intro);
         validation = checkBox(R.string.launcher_validation);
         gfxCapture = checkBox(R.string.launcher_gfx_capture);
@@ -302,8 +455,7 @@ public final class LauncherActivity extends Activity {
         diagnosticsStatus = statusText();
         debug.addView(diagnosticsStatus);
         debug.addView(button(R.string.launcher_open_logs, view -> openFiles("transfer")));
-
-        return scroll;
+        content.addView(debug);
     }
 
     /** Updates whichever page's views currently exist - settings, home, or (transiently) neither. */
@@ -316,8 +468,8 @@ public final class LauncherActivity extends Activity {
             installStatus.setText(stagedInstall && !lastInstallState.ready
                 ? getString(R.string.launcher_install_staged)
                 : lastInstallState.message);
-            installStatus.setTextColor(lastInstallState.ready ? Color.rgb(25, 120, 55)
-                : stagedInstall ? Color.rgb(180, 110, 20) : Color.rgb(180, 45, 35));
+            installStatus.setTextColor(lastInstallState.ready ? Color.rgb(100, 210, 130)
+                : stagedInstall ? Color.rgb(230, 165, 65) : Color.rgb(235, 95, 85));
         }
 
         if (playButton != null) {
@@ -339,16 +491,16 @@ public final class LauncherActivity extends Activity {
             String imported = readFirstLine(installedMarker);
             if (recoveryMarker.isFile()) {
                 driverStatus.setText(R.string.launcher_driver_recovery);
-                driverStatus.setTextColor(Color.rgb(180, 45, 35));
+                driverStatus.setTextColor(Color.rgb(235, 95, 85));
             } else if (pending > 0) {
                 driverStatus.setText(getString(R.string.launcher_driver_pending, pending));
-                driverStatus.setTextColor(Color.DKGRAY);
+                driverStatus.setTextColor(Color.rgb(170, 170, 182));
             } else if (!imported.isEmpty()) {
                 driverStatus.setText(getString(R.string.launcher_driver_installed, imported));
-                driverStatus.setTextColor(Color.DKGRAY);
+                driverStatus.setTextColor(Color.rgb(170, 170, 182));
             } else {
                 driverStatus.setText(R.string.launcher_driver_builtin);
-                driverStatus.setTextColor(Color.DKGRAY);
+                driverStatus.setTextColor(Color.rgb(170, 170, 182));
             }
         }
 
@@ -410,33 +562,57 @@ public final class LauncherActivity extends Activity {
             : getString(R.string.game_ready_missing_dlc, dlc, DLC_DIRECTORIES.length));
     }
 
+    /** Loads whichever section's widgets currently exist - each section builds only
+     *  its own fields, so most of these are null except right after their section
+     *  was just built. */
     private void loadSettings() {
         Map<String, String> config = readConfig(AppStorage.configFile(this));
-        select(driverSpinner, config.get("Video.VulkanDriver"), DRIVER_VALUES);
-        select(renderSpinner, config.get("Video.RenderMode"), RENDER_MODE_VALUES);
-        applyDriverPresetToLauncher();
-        skipIntro.setChecked(Boolean.parseBoolean(config.get("Codes.SkipIntroLogos")));
-        validation.setChecked(new File(getFilesDir(), "turnip/vk_layer_settings.txt").isFile());
-        gfxCapture.setChecked(new File(AppStorage.driverImportDir(this), "gfxrecon_capture.txt").isFile());
-        forceBc.setChecked(new File(getFilesDir(), "force_bc.txt").isFile());
+        if (driverSpinner != null) {
+            select(driverSpinner, config.get("Video.VulkanDriver"), DRIVER_VALUES);
+            select(renderSpinner, config.get("Video.RenderMode"), RENDER_MODE_VALUES);
+            applyDriverPresetToLauncher();
+        }
+        if (skipIntro != null) {
+            skipIntro.setChecked(Boolean.parseBoolean(config.get("Codes.SkipIntroLogos")));
+        }
+        if (validation != null) {
+            validation.setChecked(new File(getFilesDir(), "turnip/vk_layer_settings.txt").isFile());
+        }
+        if (gfxCapture != null) {
+            gfxCapture.setChecked(new File(AppStorage.driverImportDir(this), "gfxrecon_capture.txt").isFile());
+        }
+        if (forceBc != null) {
+            forceBc.setChecked(new File(getFilesDir(), "force_bc.txt").isFile());
+        }
     }
 
-    /** Persists the settings-page widgets' current state. A no-op (returns true) when
-     *  the settings page isn't built - its fields were already saved on the way back
-     *  to the home page, so there is nothing pending. */
+    /** Persists whichever section's widgets currently exist. Each of the settings
+     *  sections that holds persisted state is independent, since only one is built
+     *  (and can hold pending changes) at a time. */
     private boolean saveSettings() {
-        if (driverSpinner == null) return true;
-        applyDriverPresetToLauncher();
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
-        values.put("Video.VulkanDriver", quote(DRIVER_VALUES[driverSpinner.getSelectedItemPosition()]));
-        values.put("Video.RenderMode", quote(RENDER_MODE_VALUES[renderSpinner.getSelectedItemPosition()]));
-        values.put("Codes.SkipIntroLogos", Boolean.toString(skipIntro.isChecked()));
+        if (driverSpinner != null) {
+            applyDriverPresetToLauncher();
+            values.put("Video.VulkanDriver", quote(DRIVER_VALUES[driverSpinner.getSelectedItemPosition()]));
+            values.put("Video.RenderMode", quote(RENDER_MODE_VALUES[renderSpinner.getSelectedItemPosition()]));
+        }
+        if (skipIntro != null) {
+            values.put("Codes.SkipIntroLogos", Boolean.toString(skipIntro.isChecked()));
+        }
         try {
-            patchConfig(AppStorage.configFile(this), values);
-            setMarker(new File(getFilesDir(), "turnip/vk_layer_settings.txt"), validation.isChecked(),
-                "khronos_validation.enables = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT\n");
-            setMarker(new File(AppStorage.driverImportDir(this), "gfxrecon_capture.txt"), gfxCapture.isChecked(), "");
-            setMarker(new File(getFilesDir(), "force_bc.txt"), forceBc.isChecked(), "");
+            if (!values.isEmpty()) {
+                patchConfig(AppStorage.configFile(this), values);
+            }
+            if (validation != null) {
+                setMarker(new File(getFilesDir(), "turnip/vk_layer_settings.txt"), validation.isChecked(),
+                    "khronos_validation.enables = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT\n");
+            }
+            if (gfxCapture != null) {
+                setMarker(new File(AppStorage.driverImportDir(this), "gfxrecon_capture.txt"), gfxCapture.isChecked(), "");
+            }
+            if (forceBc != null) {
+                setMarker(new File(getFilesDir(), "force_bc.txt"), forceBc.isChecked(), "");
+            }
             return true;
         } catch (IOException exception) {
             showError(getString(R.string.error_settings_save, exception.getMessage()));
@@ -506,6 +682,12 @@ public final class LauncherActivity extends Activity {
             case REQUEST_MOD_TREE:
                 startInstall(data.getData(), false, false);
                 return;
+            case REQUEST_CUSTOM_BACKGROUND:
+                importCustomImage(data.getData(), customBackgroundFile(), 2200);
+                return;
+            case REQUEST_CUSTOM_LOGO:
+                importCustomImage(data.getData(), customLogoFile(), 1200);
+                return;
             case REQUEST_DRIVER:
                 break;
             default:
@@ -538,6 +720,65 @@ public final class LauncherActivity extends Activity {
         } catch (IOException exception) {
             target.delete();
             showError(getString(R.string.error_driver_copy, exception.getMessage()));
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Home screen appearance: an optional user-picked background/logo image,
+    // stored as a private copy so the picker's grant doesn't need to outlive
+    // this session. Purely cosmetic - unrelated to game saves/config.
+    // ------------------------------------------------------------------
+
+    private File customBackgroundFile() {
+        return new File(getFilesDir(), "launcher_appearance/background.png");
+    }
+
+    private File customLogoFile() {
+        return new File(getFilesDir(), "launcher_appearance/logo.png");
+    }
+
+    private void chooseCustomImage(int requestCode) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("image/*");
+        startActivityForResult(intent, requestCode);
+    }
+
+    /** Downscales and copies a picked gallery image to `destination` as PNG, then
+     *  rebuilds whichever page is showing so the change is visible immediately. */
+    private void importCustomImage(Uri source, File destination, int maxDimension) {
+        try {
+            File parent = destination.getParentFile();
+            if (!parent.isDirectory() && !parent.mkdirs()) throw new IOException("Cannot create " + parent);
+
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream probe = openSourceStream(source)) {
+                BitmapFactory.decodeStream(probe, null, bounds);
+            }
+            int sample = 1;
+            while (bounds.outWidth / sample > maxDimension || bounds.outHeight / sample > maxDimension) sample *= 2;
+
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            Bitmap bitmap;
+            try (InputStream input = openSourceStream(source)) {
+                bitmap = BitmapFactory.decodeStream(input, null, options);
+            }
+            if (bitmap == null) throw new IOException("Unsupported image format");
+
+            try (FileOutputStream output = new FileOutputStream(destination)) {
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output);
+            }
+            bitmap.recycle();
+
+            if (onSettingsPage) {
+                setContentView(buildSettingsPage());
+                loadSettings();
+                refreshStatuses();
+            }
+        } catch (IOException exception) {
+            showError(getString(R.string.error_image_import, exception.getMessage()));
         }
     }
 
@@ -990,51 +1231,13 @@ public final class LauncherActivity extends Activity {
         }
     }
 
-    private LinearLayout card(int titleId) {
-        LinearLayout card = column();
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackgroundColor(Color.rgb(245, 245, 245));
-        LinearLayout.LayoutParams params = matchWrap();
-        params.bottomMargin = dp(12);
-        card.setLayoutParams(params);
-        TextView title = text(getString(titleId), 19, true);
-        title.setPadding(0, 0, 0, dp(7));
-        card.addView(title);
-        return card;
-    }
-
-    /**
-     * A card whose body collapses/expands when its header is tapped. The expanded
-     * state is remembered per card in the activity preferences. Adds itself to
-     * {@code page} and returns the body layout for the caller to populate.
-     */
-    private LinearLayout collapsibleCard(LinearLayout page, int titleId, String stateKey, boolean defaultExpanded) {
-        LinearLayout card = column();
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackgroundColor(Color.rgb(245, 245, 245));
-        LinearLayout.LayoutParams params = matchWrap();
-        params.bottomMargin = dp(12);
-        card.setLayoutParams(params);
-
-        final LinearLayout body = column();
-        final boolean expanded = prefs.getBoolean(stateKey, defaultExpanded);
-        body.setVisibility(expanded ? View.VISIBLE : View.GONE);
-
-        final String label = getString(titleId);
-        final TextView title = text(label, 19, true);
-        title.setPadding(0, 0, 0, dp(7));
-        title.setText((expanded ? "▾  " : "▸  ") + label);
-        title.setOnClickListener(view -> {
-            boolean nowExpanded = body.getVisibility() != View.VISIBLE;
-            body.setVisibility(nowExpanded ? View.VISIBLE : View.GONE);
-            title.setText((nowExpanded ? "▾  " : "▸  ") + label);
-            prefs.edit().putBoolean(stateKey, nowExpanded).apply();
-        });
-
-        card.addView(title);
-        card.addView(body);
-        page.addView(card);
-        return body;
+    /** A settings section's content panel. No title of its own - the sidebar item
+     *  that opens it already names the section. */
+    private LinearLayout panel() {
+        LinearLayout panel = column();
+        panel.setPadding(dp(20), dp(20), dp(20), dp(20));
+        panel.setBackgroundResource(R.drawable.bg_card_dark);
+        return panel;
     }
 
     private Spinner settingSpinner(LinearLayout parent, int labelId, int arrayId) {
@@ -1072,6 +1275,8 @@ public final class LauncherActivity extends Activity {
         Button button = new Button(this);
         button.setText(stringId);
         button.setAllCaps(false);
+        button.setTextColor(Color.rgb(225, 225, 232));
+        button.setBackgroundResource(R.drawable.bg_button_dark);
         button.setOnClickListener(listener);
         return button;
     }
@@ -1080,7 +1285,7 @@ public final class LauncherActivity extends Activity {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(size);
-        view.setTextColor(Color.rgb(25, 25, 25));
+        view.setTextColor(Color.rgb(225, 225, 232));
         if (bold) view.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return view;
     }

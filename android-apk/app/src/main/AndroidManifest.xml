@@ -65,7 +65,9 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:theme="@style/AppTheme"
-        android:hardwareAccelerated="true" >
+        android:hardwareAccelerated="true"
+        android:isGame="true"
+        android:appCategory="game" >
 
         <activity
             android:name=".LauncherActivity"

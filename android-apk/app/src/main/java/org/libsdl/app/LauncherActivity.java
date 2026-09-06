@@ -8,10 +8,12 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -98,6 +100,13 @@ public final class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        // See SDLActivity.onCreate(): the platform default keeps window content out of
+        // the display cutout in landscape unless this is set explicitly.
+        if (Build.VERSION.SDK_INT >= 28 /* Android 9 (P) */) {
+            WindowManager.LayoutParams params = getWindow().getAttributes();
+            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(params);
+        }
         prefs = getPreferences(MODE_PRIVATE);
         onSettingsPage = state != null && state.getBoolean(STATE_ON_SETTINGS_PAGE, false);
         setContentView(onSettingsPage ? buildSettingsPage() : buildHomePage());
@@ -152,15 +161,6 @@ public final class LauncherActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundResource(R.drawable.bg_launcher_gradient);
 
-        ImageView hero = new ImageView(this);
-        hero.setImageResource(R.drawable.img_hero_sonic);
-        hero.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        FrameLayout.LayoutParams heroParams = new FrameLayout.LayoutParams(dp(360), dp(360));
-        heroParams.gravity = Gravity.END | Gravity.BOTTOM;
-        heroParams.rightMargin = dp(-40);
-        heroParams.bottomMargin = dp(-40);
-        root.addView(hero, heroParams);
-
         LinearLayout column = column();
         column.setGravity(Gravity.CENTER_HORIZONTAL);
         FrameLayout.LayoutParams columnParams = new FrameLayout.LayoutParams(
@@ -186,9 +186,14 @@ public final class LauncherActivity extends Activity {
         playButton = new Button(this);
         playButton.setText(R.string.launcher_play);
         playButton.setAllCaps(false);
-        playButton.setTextSize(19);
+        playButton.setTextSize(22);
+        playButton.setLetterSpacing(0.03f);
         playButton.setTextColor(Color.rgb(30, 20, 5));
-        playButton.setTypeface(Typeface.DEFAULT_BOLD);
+        // Oswald Bold (OFL-licensed, google/fonts): a condensed display sans in the same
+        // spirit as the title's own "Tw Cen MT Condensed Extra Bold"/"Syntax Ultra Black"
+        // treatment, with the full Cyrillic coverage those two commercial fonts don't
+        // have and which bundling here has no redistribution rights for.
+        playButton.setTypeface(getResources().getFont(R.font.oswald_bold));
         playButton.setBackgroundResource(R.drawable.bg_play_button);
         playButton.setOnClickListener(view -> launchGame(false));
         LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(280), dp(60));

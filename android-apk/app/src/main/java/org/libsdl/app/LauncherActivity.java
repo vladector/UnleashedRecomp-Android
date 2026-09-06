@@ -16,6 +16,8 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -61,11 +63,11 @@ public final class LauncherActivity extends Activity {
         "Mazuri Adventure Pack", "Spagonia Adventure Pack"
     };
 
+    // Settings-page views; null while the home page is showing.
     private TextView installStatus;
     private TextView driverStatus;
     private TextView diagnosticsStatus;
     private TextView updateStatus;
-    private Button playButton;
     private Button updateButton;
     private Spinner driverSpinner;
     private Spinner renderSpinner;
@@ -73,8 +75,16 @@ public final class LauncherActivity extends Activity {
     private CheckBox validation;
     private CheckBox gfxCapture;
     private CheckBox forceBc;
+
+    // Home-page views; null while the settings page is showing.
+    private Button playButton;
+    private TextView homeHint;
+
     private SharedPreferences prefs;
     private InstallState lastInstallState;
+    private boolean onSettingsPage;
+
+    private static final String STATE_ON_SETTINGS_PAGE = "on_settings_page";
 
     private static final class InstallState {
         final boolean ready;
@@ -89,9 +99,25 @@ public final class LauncherActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getPreferences(MODE_PRIVATE);
-        setContentView(buildPage());
-        loadSettings();
+        onSettingsPage = state != null && state.getBoolean(STATE_ON_SETTINGS_PAGE, false);
+        setContentView(onSettingsPage ? buildSettingsPage() : buildHomePage());
+        if (onSettingsPage) loadSettings();
         maybeCheckForUpdates();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(STATE_ON_SETTINGS_PAGE, onSettingsPage);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (onSettingsPage) {
+            openHome();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     @Override
@@ -101,11 +127,97 @@ public final class LauncherActivity extends Activity {
         refreshStatuses();
     }
 
-    private View buildPage() {
+    private void openSettings() {
+        onSettingsPage = true;
+        setContentView(buildSettingsPage());
+        loadSettings();
+        refreshStatuses();
+    }
+
+    private void openHome() {
+        saveSettings();
+        onSettingsPage = false;
+        setContentView(buildHomePage());
+        refreshStatuses();
+    }
+
+    /**
+     * Home page: the game's own branding, a hint when it isn't ready to play, the
+     * Play button, and a link into the settings page. Everything technical
+     * (install management, driver/mod/debug configuration) lives in buildSettingsPage()
+     * instead, so this first screen a home-screen launcher shortcut lands on reads as
+     * part of the game rather than an app settings/debug panel.
+     */
+    private View buildHomePage() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundResource(R.drawable.bg_launcher_gradient);
+
+        ImageView hero = new ImageView(this);
+        hero.setImageResource(R.drawable.img_hero_sonic);
+        hero.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        FrameLayout.LayoutParams heroParams = new FrameLayout.LayoutParams(dp(360), dp(360));
+        heroParams.gravity = Gravity.END | Gravity.BOTTOM;
+        heroParams.rightMargin = dp(-40);
+        heroParams.bottomMargin = dp(-40);
+        root.addView(hero, heroParams);
+
+        LinearLayout column = column();
+        column.setGravity(Gravity.CENTER_HORIZONTAL);
+        FrameLayout.LayoutParams columnParams = new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        columnParams.gravity = Gravity.CENTER;
+        root.addView(column, columnParams);
+
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.img_logo);
+        logo.setAdjustViewBounds(true);
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(
+            dp(380), LinearLayout.LayoutParams.WRAP_CONTENT);
+        column.addView(logo, logoParams);
+
+        homeHint = text("", 14, false);
+        homeHint.setTextColor(Color.rgb(225, 170, 90));
+        homeHint.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hintParams = matchWrap();
+        hintParams.topMargin = dp(16);
+        homeHint.setLayoutParams(hintParams);
+        column.addView(homeHint);
+
+        playButton = new Button(this);
+        playButton.setText(R.string.launcher_play);
+        playButton.setAllCaps(false);
+        playButton.setTextSize(19);
+        playButton.setTextColor(Color.rgb(30, 20, 5));
+        playButton.setTypeface(Typeface.DEFAULT_BOLD);
+        playButton.setBackgroundResource(R.drawable.bg_play_button);
+        playButton.setOnClickListener(view -> launchGame(false));
+        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(dp(280), dp(60));
+        playParams.topMargin = dp(20);
+        column.addView(playButton, playParams);
+
+        TextView settingsLink = text(getString(R.string.launcher_settings), 15, false);
+        settingsLink.setTextColor(Color.rgb(150, 150, 165));
+        settingsLink.setGravity(Gravity.CENTER);
+        settingsLink.setPadding(dp(18), dp(18), dp(18), dp(6));
+        settingsLink.setOnClickListener(view -> openSettings());
+        column.addView(settingsLink);
+
+        return root;
+    }
+
+    private View buildSettingsPage() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout page = column();
         page.setPadding(dp(18), dp(18), dp(18), dp(28));
         scroll.addView(page);
+
+        TextView back = text(getString(R.string.launcher_back_to_home), 15, false);
+        // The activity draws edge-to-edge, so the first item in the scroll content
+        // would otherwise land partly under the status bar. dp(18) of page padding
+        // isn't enough to clear it; give this one extra top padding of its own.
+        back.setPadding(0, dp(28), 0, dp(10));
+        back.setOnClickListener(view -> openHome());
+        page.addView(back);
 
         TextView title = text(getString(R.string.launcher_title), 28, true);
         page.addView(title);
@@ -186,49 +298,61 @@ public final class LauncherActivity extends Activity {
         debug.addView(diagnosticsStatus);
         debug.addView(button(R.string.launcher_open_logs, view -> openFiles("transfer")));
 
-        playButton = button(R.string.launcher_play, view -> launchGame(false));
-        playButton.setTextSize(18);
-        LinearLayout.LayoutParams playParams = matchWrap();
-        playParams.topMargin = dp(8);
-        page.addView(playButton, playParams);
         return scroll;
     }
 
+    /** Updates whichever page's views currently exist - settings, home, or (transiently) neither. */
     private void refreshStatuses() {
         lastInstallState = inspectInstallation();
         boolean stagedInstall = hasStagedGamePackages();
-        installStatus.setText(stagedInstall && !lastInstallState.ready
-            ? getString(R.string.launcher_install_staged)
-            : lastInstallState.message);
-        installStatus.setTextColor(lastInstallState.ready ? Color.rgb(25, 120, 55)
-            : stagedInstall ? Color.rgb(180, 110, 20) : Color.rgb(180, 45, 35));
-        playButton.setEnabled(lastInstallState.ready || stagedInstall);
+        boolean ready = lastInstallState.ready || stagedInstall;
 
-        File installedMarker = new File(getFilesDir(), "turnip/last_imported_driver.txt");
-        File recoveryMarker = new File(getFilesDir(), "turnip/vulkan_startup_state.txt");
-        int pending = 0;
-        for (File importDir : AppStorage.driverImportDirs(this)) {
-            pending += countDriverPackages(importDir);
-        }
-        String imported = readFirstLine(installedMarker);
-        if (recoveryMarker.isFile()) {
-            driverStatus.setText(R.string.launcher_driver_recovery);
-            driverStatus.setTextColor(Color.rgb(180, 45, 35));
-        } else if (pending > 0) {
-            driverStatus.setText(getString(R.string.launcher_driver_pending, pending));
-            driverStatus.setTextColor(Color.DKGRAY);
-        } else if (!imported.isEmpty()) {
-            driverStatus.setText(getString(R.string.launcher_driver_installed, imported));
-            driverStatus.setTextColor(Color.DKGRAY);
-        } else {
-            driverStatus.setText(R.string.launcher_driver_builtin);
-            driverStatus.setTextColor(Color.DKGRAY);
+        if (installStatus != null) {
+            installStatus.setText(stagedInstall && !lastInstallState.ready
+                ? getString(R.string.launcher_install_staged)
+                : lastInstallState.message);
+            installStatus.setTextColor(lastInstallState.ready ? Color.rgb(25, 120, 55)
+                : stagedInstall ? Color.rgb(180, 110, 20) : Color.rgb(180, 45, 35));
         }
 
-        File log = new File(AppStorage.transferRoot(this), "log.txt");
-        diagnosticsStatus.setText(log.isFile()
-            ? getString(R.string.launcher_log_found, formatBytes(log.length()))
-            : getString(R.string.launcher_log_missing));
+        if (playButton != null) {
+            playButton.setEnabled(ready);
+        }
+        if (homeHint != null) {
+            homeHint.setText(lastInstallState.ready ? ""
+                : stagedInstall ? getString(R.string.launcher_home_staged)
+                : getString(R.string.launcher_home_not_ready));
+        }
+
+        if (driverStatus != null) {
+            File installedMarker = new File(getFilesDir(), "turnip/last_imported_driver.txt");
+            File recoveryMarker = new File(getFilesDir(), "turnip/vulkan_startup_state.txt");
+            int pending = 0;
+            for (File importDir : AppStorage.driverImportDirs(this)) {
+                pending += countDriverPackages(importDir);
+            }
+            String imported = readFirstLine(installedMarker);
+            if (recoveryMarker.isFile()) {
+                driverStatus.setText(R.string.launcher_driver_recovery);
+                driverStatus.setTextColor(Color.rgb(180, 45, 35));
+            } else if (pending > 0) {
+                driverStatus.setText(getString(R.string.launcher_driver_pending, pending));
+                driverStatus.setTextColor(Color.DKGRAY);
+            } else if (!imported.isEmpty()) {
+                driverStatus.setText(getString(R.string.launcher_driver_installed, imported));
+                driverStatus.setTextColor(Color.DKGRAY);
+            } else {
+                driverStatus.setText(R.string.launcher_driver_builtin);
+                driverStatus.setTextColor(Color.DKGRAY);
+            }
+        }
+
+        if (diagnosticsStatus != null) {
+            File log = new File(AppStorage.transferRoot(this), "log.txt");
+            diagnosticsStatus.setText(log.isFile()
+                ? getString(R.string.launcher_log_found, formatBytes(log.length()))
+                : getString(R.string.launcher_log_missing));
+        }
     }
 
     private InstallState inspectInstallation() {
@@ -292,7 +416,11 @@ public final class LauncherActivity extends Activity {
         forceBc.setChecked(new File(getFilesDir(), "force_bc.txt").isFile());
     }
 
+    /** Persists the settings-page widgets' current state. A no-op (returns true) when
+     *  the settings page isn't built - its fields were already saved on the way back
+     *  to the home page, so there is nothing pending. */
     private boolean saveSettings() {
+        if (driverSpinner == null) return true;
         applyDriverPresetToLauncher();
         LinkedHashMap<String, String> values = new LinkedHashMap<>();
         values.put("Video.VulkanDriver", quote(DRIVER_VALUES[driverSpinner.getSelectedItemPosition()]));
@@ -450,21 +578,23 @@ public final class LauncherActivity extends Activity {
     }
 
     private void checkForUpdates(boolean manual) {
-        updateButton.setEnabled(false);
-        updateStatus.setText(R.string.update_checking);
+        if (updateButton != null) updateButton.setEnabled(false);
+        if (updateStatus != null) updateStatus.setText(R.string.update_checking);
         UpdateManager.check(this, (update, error) -> {
-            updateButton.setEnabled(true);
+            if (updateButton != null) updateButton.setEnabled(true);
             if (error != null) {
-                updateStatus.setText(getString(R.string.update_error, error));
+                if (updateStatus != null) updateStatus.setText(getString(R.string.update_error, error));
                 return;
             }
             prefs.edit().putLong("update_last_check", System.currentTimeMillis()).apply();
             if (update == null) {
-                updateStatus.setText(getString(R.string.update_up_to_date, UpdateManager.currentVersion(this)));
+                if (updateStatus != null) {
+                    updateStatus.setText(getString(R.string.update_up_to_date, UpdateManager.currentVersion(this)));
+                }
                 if (manual) Toast.makeText(this, R.string.update_up_to_date_short, Toast.LENGTH_LONG).show();
                 return;
             }
-            updateStatus.setText(getString(R.string.update_available, update.version));
+            if (updateStatus != null) updateStatus.setText(getString(R.string.update_available, update.version));
             String notes = update.notes != null ? update.notes.trim() : "";
             if (notes.length() > 3000) notes = notes.substring(0, 3000) + "…";
             String message = getString(R.string.update_dialog_message, update.version,
@@ -479,21 +609,25 @@ public final class LauncherActivity extends Activity {
     }
 
     private void downloadUpdate(UpdateManager.UpdateInfo update) {
-        updateButton.setEnabled(false);
-        updateStatus.setText(R.string.update_downloading);
+        if (updateButton != null) updateButton.setEnabled(false);
+        if (updateStatus != null) updateStatus.setText(R.string.update_downloading);
         UpdateManager.download(this, update, new UpdateManager.DownloadCallback() {
             @Override
             public void progress(long downloaded, long total) {
-                updateStatus.setText(getString(R.string.update_download_progress,
-                    formatBytes(downloaded), formatBytes(total)));
+                if (updateStatus != null) {
+                    updateStatus.setText(getString(R.string.update_download_progress,
+                        formatBytes(downloaded), formatBytes(total)));
+                }
             }
 
             @Override
             public void complete(String error) {
-                updateButton.setEnabled(true);
-                updateStatus.setText(error == null
-                    ? getString(R.string.update_ready_to_install)
-                    : getString(R.string.update_error, error));
+                if (updateButton != null) updateButton.setEnabled(true);
+                if (updateStatus != null) {
+                    updateStatus.setText(error == null
+                        ? getString(R.string.update_ready_to_install)
+                        : getString(R.string.update_error, error));
+                }
             }
         });
     }

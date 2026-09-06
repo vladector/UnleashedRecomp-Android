@@ -50,6 +50,10 @@
     <string name="launcher_gfx_capture">Записывать трассу GFXReconstruct (очень большой файл, медленно)</string>
     <string name="launcher_open_logs">Открыть логи и трассы</string>
     <string name="launcher_play">Запустить игру</string>
+    <string name="launcher_settings">Настройки</string>
+    <string name="launcher_back_to_home">← Домой</string>
+    <string name="launcher_home_not_ready">Установите файлы игры в Настройках, чтобы начать играть.</string>
+    <string name="launcher_home_staged">Пакеты игры подготовлены и установятся при следующем запуске.</string>
     <string name="launcher_driver_pending">Пакетов драйвера для установки при следующем запуске: %1$d.</string>
     <string name="launcher_driver_installed">Доступен импортированный драйвер: %1$s</string>
     <string name="launcher_driver_builtin">Доступны системный и встроенные драйверы Turnip. Импортированный драйвер не найден.</string>

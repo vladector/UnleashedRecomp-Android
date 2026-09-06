@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">UnleashedRecomp</string>
+    <string name="app_name">Unleashed Recompiled</string>
     <string name="documents_game_title">Файлы игры Unleashed Recomp</string>
     <string name="documents_game_summary">Активная игра, моды, конфигурация и сохранения</string>
     <string name="documents_transfer_title">Передача файлов Unleashed Recomp</string>
